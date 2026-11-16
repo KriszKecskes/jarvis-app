@@ -90,6 +90,7 @@ jobs:
   windows:
     # A Visual Studio, a Ninja, az LLVM és a Python a futtatón rajta van; a Vulkan SDK-t (glslc + fejlécek) mi tesszük fel.
     runs-on: windows-2022
+    timeout-minutes: 90
     env:
       CARGO_TARGET_DIR: C:\jt            # rövid útvonal: a whisper.cpp shader-építése különben átlépi a 260 karaktert
       CMAKE_GENERATOR: Ninja
@@ -120,13 +121,18 @@ jobs:
             $p = Start-Process $exe -ArgumentList '--accept-licenses', '--default-answer', '--confirm-command', 'install' -Wait -PassThru
             if ($p.ExitCode -ne 0) { throw "A Vulkan SDK telepítése nem sikerült ($($p.ExitCode))" }
           }
-          # Az SDK nem hozza a vulkan-1.dll-t (videokártya nélküli futtatón a System32-ben sincs): a Vulkan Runtime-ot is feltesszük,
-          # a windows-stage.ps1 a betöltőt onnan másolja a telepítőbe.
-          $rt = Join-Path $env:RUNNER_TEMP 'vulkan-rt.exe'
-          Invoke-WebRequest "https://sdk.lunarg.com/sdk/download/$env:VULKAN_VERSION/windows/VulkanRT-$env:VULKAN_VERSION-Installer.exe" -OutFile $rt
-          $p = Start-Process $rt -ArgumentList '/S' -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw "A Vulkan Runtime telepítése nem sikerült ($($p.ExitCode))" }
-          Get-ChildItem "$dir\Bin\vulkan-1.dll", "$env:SystemRoot\System32\vulkan-1.dll" -ErrorAction SilentlyContinue | ForEach-Object FullName
+          # Az SDK nem hozza a vulkan-1.dll-t (videokártya nélküli futtatón a System32-ben sincs). A Runtime telepítője nem
+          # csendesíthető (lefagy), ezért 7-Zippel kicsomagoljuk, és a betöltőt az SDK Bin mappájába tesszük (a windows-stage.ps1 onnan veszi).
+          if (-not (Test-Path "$dir\Bin\vulkan-1.dll")) {
+            $rt = Join-Path $env:RUNNER_TEMP 'vulkan-rt.exe'
+            Invoke-WebRequest "https://sdk.lunarg.com/sdk/download/$env:VULKAN_VERSION/windows/VulkanRT-$env:VULKAN_VERSION-Installer.exe" -OutFile $rt
+            $x = Join-Path $env:RUNNER_TEMP 'vulkan-rt'
+            & 7z x $rt "-o$x" -y | Out-Null
+            $dll = Get-ChildItem $x -Recurse -Filter vulkan-1.dll | Where-Object { $_.FullName -notmatch 'x86|Win32|32' } | Select-Object -First 1
+            if (-not $dll) { Get-ChildItem $x -Recurse | Select-Object -First 40 FullName; throw 'Nincs vulkan-1.dll a Vulkan Runtime telepítőjében' }
+            Copy-Item $dll.FullName "$dir\Bin\vulkan-1.dll"
+          }
+          Get-Item "$dir\Bin\vulkan-1.dll" | ForEach-Object { "$($_.FullName) $($_.Length)" }
           "VULKAN_SDK=$dir" >> $env:GITHUB_ENV
           "$dir\Bin" >> $env:GITHUB_PATH
           "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
