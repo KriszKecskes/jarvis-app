@@ -121,18 +121,20 @@ jobs:
             $p = Start-Process $exe -ArgumentList '--accept-licenses', '--default-answer', '--confirm-command', 'install' -Wait -PassThru
             if ($p.ExitCode -ne 0) { throw "A Vulkan SDK telepítése nem sikerült ($($p.ExitCode))" }
           }
-          # Az SDK nem hozza a vulkan-1.dll-t (videokártya nélküli futtatón a System32-ben sincs): a Vulkan Runtime-ot is
-          # feltesszük (Qt IFW telepítő, az SDK-éval azonos kapcsolókkal; a /S-től lefagy), és a betöltőt az SDK Bin mappájába
-          # másoljuk, ahonnan a windows-stage.ps1 veszi.
+          # Az SDK nem hozza a vulkan-1.dll-t, videokártya nélküli futtatón a System32-ben sincs, a Runtime telepítője pedig
+          # csendes módban is lefagy: a Khronos betöltőjét (Vulkan-Loader, az SDK-val azonos verzió) magunk fordítjuk, és az SDK
+          # Bin mappájába tesszük, ahonnan a windows-stage.ps1 a telepítőbe másolja.
           if (-not (Test-Path "$dir\Bin\vulkan-1.dll")) {
-            $rt = Join-Path $env:RUNNER_TEMP 'vulkan-rt.exe'
-            Invoke-WebRequest "https://sdk.lunarg.com/sdk/download/$env:VULKAN_VERSION/windows/VulkanRT-$env:VULKAN_VERSION-Installer.exe" -OutFile $rt
-            $p = Start-Process $rt -ArgumentList '--accept-licenses', '--default-answer', '--confirm-command', 'install' -PassThru
-            if (-not $p.WaitForExit(180000)) { $p.Kill(); throw 'A Vulkan Runtime telepítése nem fejeződött be 3 percen belül' }
-            if ($p.ExitCode -ne 0) { throw "A Vulkan Runtime telepítése nem sikerült ($($p.ExitCode))" }
-            $dll = @("$env:SystemRoot\System32\vulkan-1.dll") + @(Get-ChildItem 'C:\VulkanRT' -Recurse -Filter vulkan-1.dll -ErrorAction SilentlyContinue | ForEach-Object FullName) | Where-Object { Test-Path $_ } | Select-Object -First 1
-            if (-not $dll) { throw 'A Vulkan Runtime telepítése után sincs vulkan-1.dll' }
-            Copy-Item $dll "$dir\Bin\vulkan-1.dll"
+            $src = Join-Path $env:RUNNER_TEMP 'vkloader'
+            git clone --quiet --depth 1 --branch "v$env:VULKAN_VERSION" https://github.com/KhronosGroup/Vulkan-Loader.git $src
+            if ($LASTEXITCODE) { throw 'A Vulkan-Loader klónozása nem sikerült' }
+            cmake -S $src -B "$src\build" -G Ninja -D CMAKE_BUILD_TYPE=Release -D UPDATE_DEPS=ON -D BUILD_TESTS=OFF
+            if ($LASTEXITCODE) { throw 'A Vulkan-Loader beállítása nem sikerült' }
+            cmake --build "$src\build" --target vulkan
+            if ($LASTEXITCODE) { throw 'A Vulkan-Loader fordítása nem sikerült' }
+            $dll = Get-ChildItem "$src\build" -Recurse -Filter vulkan-1.dll | Select-Object -First 1
+            if (-not $dll) { throw 'A Vulkan-Loader fordítása után nincs vulkan-1.dll' }
+            Copy-Item $dll.FullName "$dir\Bin\vulkan-1.dll"
           }
           Get-Item "$dir\Bin\vulkan-1.dll" | ForEach-Object { "$($_.FullName) $($_.Length)" }
           "VULKAN_SDK=$dir" >> $env:GITHUB_ENV
