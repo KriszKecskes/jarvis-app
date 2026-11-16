@@ -1,7 +1,6 @@
-# A Jarvis felhős kiadás-építése. EZ A FÁJL A `jarvis-app` (nyilvános) REPÓBAN FUT: ott `.github/workflows/release.yml`
-# néven él; a forrása a `jarvis-rs`-ben van (`.github/jarvis-app/release.yml`, ez inert: az Actions csak a workflows/
-# mappát nézi). A privát forrást a SOURCE_TOKEN titokkal húzza le, az aláíró kulcs titok (TAURI_SIGNING_PRIVATE_KEY[_PASSWORD]).
-# Leírás: docs/RELEASE.md "Felhős kiadás".
+# A Jarvis felhős kiadás-építése. Ez a nyilvános `jarvis-app` repó workflow-ja: a privát forrást (`jarvis-rs`) a
+# SOURCE_TOKEN titokkal húzza le, az aláíró kulcs titok (TAURI_SIGNING_PRIVATE_KEY[_PASSWORD]).
+# Leírás (a jarvis-rs repóban): docs/RELEASE.md "Felhős kiadás".
 #
 # Indítás: tag a jarvis-app repóban (v<verzió>), vagy kézzel (Actions → release → Run workflow; alapból nem publikál).
 name: release
