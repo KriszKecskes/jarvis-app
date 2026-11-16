@@ -190,8 +190,55 @@ jobs:
           path: dist/release/${{ env.VERSION }}/*
           if-no-files-found: error
 
+  macos:
+    # Apple Silicon (arm64) futtató: ugyanaz a scripts/release.sh, mint kézzel; a hang-sidecar Metallal épül.
+    # Intel Mac nem készül; a csomag aláíratlan (Gatekeeper), csak az updater-aláírása van meg.
+    runs-on: macos-14
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPO }}
+          ref: ${{ env.SOURCE_REF }}
+          token: ${{ secrets.SOURCE_TOKEN }}
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Rendszercsomagok (hangmodul)
+        run: brew install cmake espeak-ng
+
+      - name: tauri-cli
+        run: cargo install tauri-cli --version '^2' --locked
+
+      - name: Verzió ellenőrzése (a tag és a Cargo.toml egyezzen)
+        run: |
+          VERSION="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"]=="jarvis-app"))')"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          if [ "${{ github.event_name }}" = "push" ] && [ "v$VERSION" != "${{ github.ref_name }}" ]; then
+            echo "A tag (${{ github.ref_name }}) nem egyezik a Cargo.toml verziójával (v$VERSION)." >&2
+            exit 1
+          fi
+
+      - name: Aláírt csomag építése
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          umask 077
+          printf '%s' "$TAURI_SIGNING_PRIVATE_KEY" > "$RUNNER_TEMP/jarvis.key"
+          TAURI_SIGNING_PRIVATE_KEY_PATH="$RUNNER_TEMP/jarvis.key" scripts/release.sh
+          rm -f "$RUNNER_TEMP/jarvis.key"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/release/${{ env.VERSION }}/*
+          if-no-files-found: error
+
   publish:
-    needs: [linux, windows]
+    needs: [linux, windows, macos]
     # tagre automatikusan; kézi indításnál csak ha kérték
     if: github.event_name == 'push' || inputs.publish
     runs-on: ubuntu-latest
