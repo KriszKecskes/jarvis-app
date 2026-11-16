@@ -32,7 +32,9 @@ env:
 
 jobs:
   linux:
-    runs-on: ubuntu-22.04   # régebbi glibc: az AppImage az újabb disztrókon is fut
+    # 24.04: itt van `glslc` (a hangmodul Vulkan-shaderéhez). Az AppImage ezért glibc ≥ 2.39 rendszert kér (Ubuntu 24.04+,
+    # Fedora 40+, Debian 13+); régebbihez 22.04 + a LunarG Vulkan SDK kellene.
+    runs-on: ubuntu-24.04
     steps:
       - name: Hely felszabadítása (a hangmodul fordítása sokat foglal)
         run: |
