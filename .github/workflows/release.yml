@@ -87,8 +87,88 @@ jobs:
           path: dist/release/${{ env.VERSION }}/*
           if-no-files-found: error
 
+  windows:
+    # A Visual Studio, a Ninja, az LLVM és a Python a futtatón rajta van; a Vulkan SDK-t (glslc + fejlécek) mi tesszük fel.
+    runs-on: windows-2022
+    env:
+      CARGO_TARGET_DIR: C:\jt            # rövid útvonal: a whisper.cpp shader-építése különben átlépi a 260 karaktert
+      CMAKE_GENERATOR: Ninja
+      VULKAN_VERSION: 1.3.296.0
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPO }}
+          ref: ${{ env.SOURCE_REF }}
+          token: ${{ secrets.SOURCE_TOKEN }}
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-directories: C:\jt
+
+      - name: MSVC-környezet (cl, link a PATH-on)
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Vulkan SDK
+        shell: pwsh
+        run: |
+          $dir = "C:\VulkanSDK\$env:VULKAN_VERSION"
+          if (-not (Test-Path $dir)) {
+            $exe = Join-Path $env:RUNNER_TEMP 'vulkan-sdk.exe'
+            Invoke-WebRequest "https://sdk.lunarg.com/sdk/download/$env:VULKAN_VERSION/windows/VulkanSDK-$env:VULKAN_VERSION-Installer.exe" -OutFile $exe
+            $p = Start-Process $exe -ArgumentList '--accept-licenses', '--default-answer', '--confirm-command', 'install' -Wait -PassThru
+            if ($p.ExitCode -ne 0) { throw "A Vulkan SDK telepítése nem sikerült ($($p.ExitCode))" }
+          }
+          "VULKAN_SDK=$dir" >> $env:GITHUB_ENV
+          "$dir\Bin" >> $env:GITHUB_PATH
+          "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
+
+      - name: tauri-cli
+        shell: bash
+        run: cargo install tauri-cli --version '^2' --locked
+
+      - name: Verzió ellenőrzése (a tag és a Cargo.toml egyezzen)
+        shell: bash
+        run: |
+          VERSION="$(cargo metadata --no-deps --format-version 1 | python -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"]=="jarvis-app"))')"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          if [ "${{ github.event_name }}" = "push" ] && [ "v$VERSION" != "${{ github.ref_name }}" ]; then
+            echo "A tag (${{ github.ref_name }}) nem egyezik a Cargo.toml verziójával (v$VERSION)." >&2
+            exit 1
+          fi
+
+      - name: Összetevők (hang-sidecar, DLL-ek, app)
+        shell: powershell
+        run: scripts\windows-stage.ps1
+
+      - name: Aláírt NSIS-telepítő
+        shell: powershell
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: scripts\windows-installer.ps1
+
+      - name: Csomag és a latest.json részlete
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="dist/release/$VERSION"
+          NAME="Jarvis_${VERSION}_windows-x86_64.exe"
+          SRC="$(cygpath -u 'C:\jt')/release/bundle/nsis/Jarvis_${VERSION}_x64-setup.exe"
+          [ -f "$SRC" ] && [ -f "$SRC.sig" ] || { echo "Hiányzik a telepítő vagy az aláírása: $SRC(.sig)" >&2; exit 1; }
+          mkdir -p "$OUT"
+          cp "$SRC" "$OUT/$NAME"
+          python tools/release_manifest.py part "$OUT" windows-x86_64 "$NAME" "$SRC.sig"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/release/${{ env.VERSION }}/*
+          if-no-files-found: error
+
   publish:
-    needs: [linux]
+    needs: [linux, windows]
     # tagre automatikusan; kézi indításnál csak ha kérték
     if: github.event_name == 'push' || inputs.publish
     runs-on: ubuntu-latest
