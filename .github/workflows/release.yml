@@ -124,8 +124,14 @@ jobs:
           "$dir\Bin" >> $env:GITHUB_PATH
           "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
 
+      - name: A Git saját link.exe-je ne takarja az MSVC linkerét
+        shell: pwsh
+        run: |
+          $l = 'C:\Program Files\Git\usr\bin\link.exe'
+          if (Test-Path $l) { Remove-Item $l -Force }
+
       - name: tauri-cli
-        shell: bash
+        shell: pwsh
         run: cargo install tauri-cli --version '^2' --locked
 
       - name: Verzió ellenőrzése (a tag és a Cargo.toml egyezzen)
