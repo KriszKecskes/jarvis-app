@@ -120,6 +120,13 @@ jobs:
             $p = Start-Process $exe -ArgumentList '--accept-licenses', '--default-answer', '--confirm-command', 'install' -Wait -PassThru
             if ($p.ExitCode -ne 0) { throw "A Vulkan SDK telepítése nem sikerült ($($p.ExitCode))" }
           }
+          # Az SDK nem hozza a vulkan-1.dll-t (videokártya nélküli futtatón a System32-ben sincs): a Vulkan Runtime-ot is feltesszük,
+          # a windows-stage.ps1 a betöltőt onnan másolja a telepítőbe.
+          $rt = Join-Path $env:RUNNER_TEMP 'vulkan-rt.exe'
+          Invoke-WebRequest "https://sdk.lunarg.com/sdk/download/$env:VULKAN_VERSION/windows/VulkanRT-$env:VULKAN_VERSION-Installer.exe" -OutFile $rt
+          $p = Start-Process $rt -ArgumentList '/S' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "A Vulkan Runtime telepítése nem sikerült ($($p.ExitCode))" }
+          Get-ChildItem "$dir\Bin\vulkan-1.dll", "$env:SystemRoot\System32\vulkan-1.dll" -ErrorAction SilentlyContinue | ForEach-Object FullName
           "VULKAN_SDK=$dir" >> $env:GITHUB_ENV
           "$dir\Bin" >> $env:GITHUB_PATH
           "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
