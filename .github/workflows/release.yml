@@ -270,7 +270,9 @@ jobs:
   publish:
     needs: [plan, linux, windows, macos]
     # tagre automatikusan; kézi indításnál csak ha kérték; a kihagyott (már kint lévő) platform jobja nem akasztja meg
-    if: ${{ !cancelled() && !failure() && (github.event_name == 'push' || inputs.publish) }}
+    # a megszakadt (pl. a macOS-futtató kapacitáshiánya miatt) és az elbukott job is megállítja; csak a kihagyott (már kint
+    # lévő platform) nem
+    if: ${{ always() && (github.event_name == 'push' || inputs.publish) && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
