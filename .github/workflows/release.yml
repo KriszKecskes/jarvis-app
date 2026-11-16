@@ -121,18 +121,18 @@ jobs:
             $p = Start-Process $exe -ArgumentList '--accept-licenses', '--default-answer', '--confirm-command', 'install' -Wait -PassThru
             if ($p.ExitCode -ne 0) { throw "A Vulkan SDK telepítése nem sikerült ($($p.ExitCode))" }
           }
-          # Az SDK nem hozza a vulkan-1.dll-t (videokártya nélküli futtatón a System32-ben sincs). A Runtime telepítője nem
-          # csendesíthető (lefagy), ezért 7-Zippel kicsomagoljuk, és a betöltőt az SDK Bin mappájába tesszük (a windows-stage.ps1 onnan veszi).
+          # Az SDK nem hozza a vulkan-1.dll-t (videokártya nélküli futtatón a System32-ben sincs): a Vulkan Runtime-ot is
+          # feltesszük (Qt IFW telepítő, az SDK-éval azonos kapcsolókkal; a /S-től lefagy), és a betöltőt az SDK Bin mappájába
+          # másoljuk, ahonnan a windows-stage.ps1 veszi.
           if (-not (Test-Path "$dir\Bin\vulkan-1.dll")) {
             $rt = Join-Path $env:RUNNER_TEMP 'vulkan-rt.exe'
             Invoke-WebRequest "https://sdk.lunarg.com/sdk/download/$env:VULKAN_VERSION/windows/VulkanRT-$env:VULKAN_VERSION-Installer.exe" -OutFile $rt
-            $x = Join-Path $env:RUNNER_TEMP 'vulkan-rt'
-            & 7z x $rt "-o$x" -y 2>&1 | Out-Host
-            $all = @(Get-ChildItem $x -Recurse -Filter vulkan-1.dll)
-            Write-Host "Talált vulkan-1.dll:"; $all | ForEach-Object { Write-Host "  $($_.FullName) $($_.Length)" }
-            $dll = $all | Where-Object { $_.FullName -notmatch 'x86|Win32|SysWOW64' } | Sort-Object Length -Descending | Select-Object -First 1
-            if (-not $dll) { Write-Host 'Kicsomagolt fájlok:'; Get-ChildItem $x -Recurse -File | Select-Object -First 60 | ForEach-Object { Write-Host "  $($_.FullName)" }; throw 'Nincs vulkan-1.dll a Vulkan Runtime telepítőjében' }
-            Copy-Item $dll.FullName "$dir\Bin\vulkan-1.dll"
+            $p = Start-Process $rt -ArgumentList '--accept-licenses', '--default-answer', '--confirm-command', 'install' -PassThru
+            if (-not $p.WaitForExit(180000)) { $p.Kill(); throw 'A Vulkan Runtime telepítése nem fejeződött be 3 percen belül' }
+            if ($p.ExitCode -ne 0) { throw "A Vulkan Runtime telepítése nem sikerült ($($p.ExitCode))" }
+            $dll = @("$env:SystemRoot\System32\vulkan-1.dll") + @(Get-ChildItem 'C:\VulkanRT' -Recurse -Filter vulkan-1.dll -ErrorAction SilentlyContinue | ForEach-Object FullName) | Where-Object { Test-Path $_ } | Select-Object -First 1
+            if (-not $dll) { throw 'A Vulkan Runtime telepítése után sincs vulkan-1.dll' }
+            Copy-Item $dll "$dir\Bin\vulkan-1.dll"
           }
           Get-Item "$dir\Bin\vulkan-1.dll" | ForEach-Object { "$($_.FullName) $($_.Length)" }
           "VULKAN_SDK=$dir" >> $env:GITHUB_ENV
