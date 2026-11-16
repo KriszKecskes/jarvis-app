@@ -126,7 +126,7 @@ jobs:
           # Bin mappájába tesszük, ahonnan a windows-stage.ps1 a telepítőbe másolja.
           if (-not (Test-Path "$dir\Bin\vulkan-1.dll")) {
             $src = Join-Path $env:RUNNER_TEMP 'vkloader'
-            git clone --quiet --depth 1 --branch "v$env:VULKAN_VERSION" https://github.com/KhronosGroup/Vulkan-Loader.git $src
+            git clone --quiet --depth 1 --branch "vulkan-sdk-$env:VULKAN_VERSION" https://github.com/KhronosGroup/Vulkan-Loader.git $src
             if ($LASTEXITCODE) { throw 'A Vulkan-Loader klónozása nem sikerült' }
             cmake -S $src -B "$src\build" -G Ninja -D CMAKE_BUILD_TYPE=Release -D UPDATE_DEPS=ON -D BUILD_TESTS=OFF
             if ($LASTEXITCODE) { throw 'A Vulkan-Loader beállítása nem sikerült' }
