@@ -193,7 +193,7 @@ jobs:
   macos:
     # Apple Silicon (arm64) futtató: ugyanaz a scripts/release.sh, mint kézzel; a hang-sidecar Metallal épül.
     # Intel Mac nem készül; a csomag aláíratlan (Gatekeeper), csak az updater-aláírása van meg.
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
