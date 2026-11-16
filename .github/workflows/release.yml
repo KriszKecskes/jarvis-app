@@ -20,7 +20,7 @@ on:
 
 concurrency:
   group: release-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' }}   # kézi próbánál az új futás leváltja a régit; tagnél nem
 
 permissions:
   contents: write   # a kiadás létrehozásához (a jarvis-app repóban)
