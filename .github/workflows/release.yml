@@ -30,7 +30,33 @@ env:
   SOURCE_REF: ${{ github.event_name == 'push' && github.ref_name || inputs.source_ref }}
 
 jobs:
+  plan:
+    # Tagre: melyik platformcsomag hiányzik még a kiadásból? Csak azokat építjük (egy félbemaradt kiadás kiegészítése, vagy
+    # egy új platform hozzáadása nem épít újra mindent). Kézi indításnál mindig mindent épít.
+    runs-on: ubuntu-latest
+    outputs:
+      linux: ${{ steps.p.outputs.linux }}
+      windows: ${{ steps.p.outputs.windows }}
+      macos: ${{ steps.p.outputs.macos }}
+    steps:
+      - id: p
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for k in linux windows macos; do echo "$k=true" >> "$GITHUB_OUTPUT"; done
+          [ "${{ github.event_name }}" = "push" ] || exit 0
+          TAG="${{ github.ref_name }}"; V="${TAG#v}"
+          ASSETS="$(gh release view "$TAG" --repo "${{ github.repository }}" --json assets --jq '.assets[].name' 2>/dev/null || true)"
+          has() { printf '%s\n' "$ASSETS" | grep -qx "$1"; }
+          has "Jarvis_${V}_linux-x86_64.AppImage"      && echo "linux=false"   >> "$GITHUB_OUTPUT"
+          has "Jarvis_${V}_windows-x86_64.exe"         && echo "windows=false" >> "$GITHUB_OUTPUT"
+          has "Jarvis_${V}_darwin-aarch64.app.tar.gz"  && echo "macos=false"   >> "$GITHUB_OUTPUT"
+          echo "Már kint van:"; printf '%s\n' "$ASSETS"
+
   linux:
+    needs: plan
+    if: needs.plan.outputs.linux == 'true'
     # 24.04: itt van `glslc` (a hangmodul Vulkan-shaderéhez). Az AppImage ezért glibc ≥ 2.39 rendszert kér (Ubuntu 24.04+,
     # Fedora 40+, Debian 13+); régebbihez 22.04 + a LunarG Vulkan SDK kellene.
     runs-on: ubuntu-24.04
@@ -88,6 +114,8 @@ jobs:
           if-no-files-found: error
 
   windows:
+    needs: plan
+    if: needs.plan.outputs.windows == 'true'
     # A Visual Studio, a Ninja, az LLVM és a Python a futtatón rajta van; a Vulkan SDK-t (glslc + fejlécek) mi tesszük fel.
     runs-on: windows-2022
     timeout-minutes: 90
@@ -191,6 +219,8 @@ jobs:
           if-no-files-found: error
 
   macos:
+    needs: plan
+    if: needs.plan.outputs.macos == 'true'
     # Apple Silicon (arm64) futtató: ugyanaz a scripts/release.sh, mint kézzel; a hang-sidecar Metallal épül.
     # Intel Mac nem készül; a csomag aláíratlan (Gatekeeper), csak az updater-aláírása van meg.
     runs-on: macos-15
@@ -238,9 +268,9 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: [linux, windows, macos]
-    # tagre automatikusan; kézi indításnál csak ha kérték
-    if: github.event_name == 'push' || inputs.publish
+    needs: [plan, linux, windows, macos]
+    # tagre automatikusan; kézi indításnál csak ha kérték; a kihagyott (már kint lévő) platform jobja nem akasztja meg
+    if: ${{ !cancelled() && !failure() && (github.event_name == 'push' || inputs.publish) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -261,10 +291,27 @@ jobs:
           set -euo pipefail
           VERSION="$(grep -m1 '^version' Cargo.toml | sed -E 's/version *= *"([^"]+)"/\1/')"
           mkdir -p out
+          if ! ls parts/*/* >/dev/null 2>&1; then echo "Nincs új csomag: minden platform már kint van."; exit 0; fi
           cp parts/*/* out/
           # a jegyzet a jarvis-rs tag üzenete (git tag -a vX.Y.Z -m "…"); a könnyűsúlyú tagnél a commit üzenete
           NOTES="$(git for-each-ref --format='%(contents)' "refs/tags/v$VERSION" | sed '/^-----BEGIN PGP/,$d')"
           [ -n "$NOTES" ] || NOTES="Jarvis $VERSION"
-          python3 tools/release_manifest.py merge out "$VERSION" "${{ github.repository }}" "$NOTES"
-          FILES=$(ls out/Jarvis_* out/latest.json)
-          gh release create "v$VERSION" --repo "${{ github.repository }}" --title "Jarvis $VERSION" --notes "$NOTES" $FILES
+          if gh release view "v$VERSION" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            # már van kiadás: a benne lévő platformok bejegyzése megmarad (új részlet nélkül), az újak hozzáadódnak
+            gh release download "v$VERSION" --repo "${{ github.repository }}" -p latest.json -D old --clobber 2>/dev/null || true
+            python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          old = Path("old/latest.json")
+          if old.exists():
+              for platform, e in json.loads(old.read_text()).get("platforms", {}).items():
+                  part = Path(f"out/part-{platform}.json")
+                  if not part.exists():
+                      part.write_text(json.dumps({platform: {"signature": e["signature"], "name": e["url"].rsplit("/", 1)[1]}}))
+          PY
+            python3 tools/release_manifest.py merge out "$VERSION" "${{ github.repository }}" "$NOTES"
+            gh release upload "v$VERSION" --repo "${{ github.repository }}" --clobber $(ls out/Jarvis_* out/latest.json)
+          else
+            python3 tools/release_manifest.py merge out "$VERSION" "${{ github.repository }}" "$NOTES"
+            gh release create "v$VERSION" --repo "${{ github.repository }}" --title "Jarvis $VERSION" --notes "$NOTES" $(ls out/Jarvis_* out/latest.json)
+          fi
