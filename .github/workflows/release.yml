@@ -267,6 +267,111 @@ jobs:
           path: dist/release/${{ env.VERSION }}/*
           if-no-files-found: error
 
+  flatpak:
+    # A Flatpak-tároló: aláírt OSTree-tároló a nyilvános `jarvis-flatpak` repóban (GitHub Pages) – ez adja a Linuxos
+    # önfrissítést (`flatpak update`). A tároló korábbi tartalmához hozzáfűz (a régi verziók/deltok megmaradnak, a
+    # `--prune-depth` metszi), a repó története minden kiadásnál egyetlen commitra tömörül (a Pages mérete számít, nem a
+    # történet). Titkok: FLATPAK_GPG_PRIVATE_KEY (+ _PASSPHRASE), FLATPAK_DEPLOY_KEY (írási deploy key a jarvis-flatpak-ra).
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      FLATPAK_REPO: KriszKecskes/jarvis-flatpak
+    steps:
+      - name: Hely felszabadítása (a hangmodul fordítása sokat foglal)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPO }}
+          ref: ${{ env.SOURCE_REF }}
+          token: ${{ secrets.SOURCE_TOKEN }}
+          fetch-depth: 0
+
+      - name: Verzió ellenőrzése (a tag és a Cargo.toml egyezzen)
+        run: |
+          VERSION="$(grep -m1 '^version' Cargo.toml | sed -E 's/version *= *"([^"]+)"/\1/')"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          if [ "${{ github.event_name }}" = "push" ] && [ "v$VERSION" != "${{ github.ref_name }}" ]; then
+            echo "A tag (${{ github.ref_name }}) nem egyezik a Cargo.toml verziójával (v$VERSION)." >&2
+            exit 1
+          fi
+
+      - name: Flatpak-eszközök
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends flatpak flatpak-builder gnupg gpg-agent
+          # az Ubuntu 24.04 alapból tiltja a felhasználói névtereket, a bwrap-nak (flatpak-builder) kellenek
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+
+      - name: A tároló korábbi tartalma
+        env:
+          DEPLOY_KEY: ${{ secrets.FLATPAK_DEPLOY_KEY }}
+        run: |
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/flatpak_deploy
+          echo "GIT_SSH_COMMAND=ssh -i $HOME/.ssh/flatpak_deploy -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" >> "$GITHUB_ENV"
+          export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/flatpak_deploy -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+          git clone --depth 1 "git@github.com:${FLATPAK_REPO}.git" "$RUNNER_TEMP/flatpak-repo"
+
+      - name: A kiadás verziója a metaadatban
+        run: |
+          sed -i "s#<release version=\"[^\"]*\" date=\"[^\"]*\"/>#<release version=\"$VERSION\" date=\"$(date -u +%F)\"/>#" \
+            installer/flatpak/hu.jarvis.app.metainfo.xml
+          grep release installer/flatpak/hu.jarvis.app.metainfo.xml
+
+      - name: Flatpak építése (a meglévő tárolóba)
+        env:
+          FLATPAK_BUILDER: flatpak-builder
+          FLATPAK_BUILDER_ARGS: --disable-rofiles-fuse
+          FLATPAK_BUILD_DIR: ${{ runner.temp }}/fpbuild
+          FLATPAK_REPO_DIR: ${{ runner.temp }}/flatpak-repo
+        run: installer/flatpak/build.sh
+
+      - name: Aláírás (a kulcs jelszava a gpg-agent gyorsítótárába kerül, nem fájlba)
+        env:
+          GPG_KEY: ${{ secrets.FLATPAK_GPG_PRIVATE_KEY }}
+          GPG_PASS: ${{ secrets.FLATPAK_GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          export GNUPGHOME="$RUNNER_TEMP/gnupg"; mkdir -m700 "$GNUPGHOME"
+          echo "allow-preset-passphrase" > "$GNUPGHOME/gpg-agent.conf"
+          printf '%s\n' "$GPG_KEY" | gpg --batch --import
+          gpgconf --kill gpg-agent; gpgconf --launch gpg-agent
+          for grip in $(gpg --list-secret-keys --with-keygrip --with-colons | awk -F: '/^grp/{print $10}'); do
+            /usr/lib/gnupg/gpg-preset-passphrase --preset --passphrase "$GPG_PASS" "$grip"
+          done
+          KEYID="$(gpg --list-secret-keys --with-colons | awk -F: '/^sec/{print $5; exit}')"
+          echo "Kulcs: $KEYID"
+          JARVIS_FLATPAK_KEY="$KEYID" installer/flatpak/sign-repo.sh "$RUNNER_TEMP/flatpak-repo"
+          gpgconf --kill gpg-agent
+          rm -rf "$GNUPGHOME"
+
+      - name: Közzététel a jarvis-flatpak-ba (csak tagre vagy kérésre, egyetlen commit)
+        if: ${{ github.event_name == 'push' || inputs.publish }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/flatpak-repo"
+          rm -rf tmp state .lock
+          cp -a "$GITHUB_WORKSPACE"/installer/flatpak/site/. .
+          git checkout -q --orphan publish
+          git config user.name "${{ github.actor }}"
+          git config user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Jarvis $VERSION (stable)"
+          git push --force origin publish:main
+
+      - name: Ellenőrzés (mi került fel)
+        run: |
+          cd "$RUNNER_TEMP/flatpak-repo"
+          git log --format='%h %an: %s' | head -1
+          du -sh --exclude=.git . | cut -f1
+          ls refs/heads/app/hu.jarvis.app/*/
+
   publish:
     needs: [plan, linux, windows, macos]
     # tagre automatikusan; kézi indításnál csak ha kérték; a kihagyott (már kint lévő) platform jobja nem akasztja meg
