@@ -13,6 +13,10 @@ on:
       source_ref:
         description: "A jarvis-rs ág/tag/commit, amiből építünk (tagre indulva a tag neve)"
         default: main
+      only_flatpak:
+        description: "Csak a Flatpak-tároló épül (a Windows/macOS kimarad, a GitHub-kiadás nem készül)"
+        type: boolean
+        default: false
       publish:
         description: "Kiadás közzététele (különben csak épít, és a csomag letölthető artifactként)"
         type: boolean
@@ -44,6 +48,10 @@ jobs:
         run: |
           set -euo pipefail
           for k in windows macos; do echo "$k=true" >> "$GITHUB_OUTPUT"; done
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.only_flatpak }}" = "true" ]; then
+            for k in windows macos; do echo "$k=false" >> "$GITHUB_OUTPUT"; done
+            exit 0
+          fi
           [ "${{ github.event_name }}" = "push" ] || exit 0
           TAG="${{ github.ref_name }}"; V="${TAG#v}"
           ASSETS="$(gh release view "$TAG" --repo "${{ github.repository }}" --json assets --jq '.assets[].name' 2>/dev/null || true)"
@@ -263,6 +271,22 @@ jobs:
             installer/flatpak/hu.jarvis.app.metainfo.xml
           grep release installer/flatpak/hu.jarvis.app.metainfo.xml
 
+      - name: Forráscsomagok előre (újrapróbálkozással és hash-ellenőrzéssel; a Launchpad néha lassú vagy 502-t ad)
+        run: |
+          set -euo pipefail
+          dl() {   # url sha256 fájlnév: a flatpak-builder letöltési gyorsítótárába (downloads/<sha256>/<név>)
+            local dir="$RUNNER_TEMP/fpbuild/state/downloads/$2"; mkdir -p "$dir"
+            for i in 1 2 3 4 5 6; do
+              if curl -fsSL --connect-timeout 20 --max-time 240 -o "$dir/$3" "$1" && echo "$2  $dir/$3" | sha256sum -c -; then return 0; fi
+              echo "újrapróbálás ($i): $3"; sleep $((i * 15))
+            done
+            echo "A forrás nem tölthető le: $1" >&2; return 1
+          }
+          dl https://launchpad.net/intltool/trunk/0.51.0/+download/intltool-0.51.0.tar.gz \
+             67c74d94196b153b774ab9f89b2fa6c6ba79352407037c8c14d5aeb334e959cd intltool-0.51.0.tar.gz
+          dl https://launchpad.net/libdbusmenu/16.04/16.04.0/+download/libdbusmenu-16.04.0.tar.gz \
+             b9cc4a2acd74509435892823607d966d424bd9ad5d0b00938f27240a1bfa878a libdbusmenu-16.04.0.tar.gz
+
       - name: Flatpak építése (a meglévő tárolóba)
         env:
           FLATPAK_BUILDER: flatpak-builder
@@ -316,7 +340,7 @@ jobs:
     # tagre automatikusan; kézi indításnál csak ha kérték; a kihagyott (már kint lévő) platform jobja nem akasztja meg
     # a megszakadt (pl. a macOS-futtató kapacitáshiánya miatt) és az elbukott job is megállítja; csak a kihagyott (már kint
     # lévő platform) nem
-    if: ${{ always() && (github.event_name == 'push' || inputs.publish) && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+    if: ${{ always() && !inputs.only_flatpak && (github.event_name == 'push' || inputs.publish) && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
