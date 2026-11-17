@@ -35,7 +35,6 @@ jobs:
     # egy új platform hozzáadása nem épít újra mindent). Kézi indításnál mindig mindent épít.
     runs-on: ubuntu-latest
     outputs:
-      linux: ${{ steps.p.outputs.linux }}
       windows: ${{ steps.p.outputs.windows }}
       macos: ${{ steps.p.outputs.macos }}
     steps:
@@ -44,74 +43,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          for k in linux windows macos; do echo "$k=true" >> "$GITHUB_OUTPUT"; done
+          for k in windows macos; do echo "$k=true" >> "$GITHUB_OUTPUT"; done
           [ "${{ github.event_name }}" = "push" ] || exit 0
           TAG="${{ github.ref_name }}"; V="${TAG#v}"
           ASSETS="$(gh release view "$TAG" --repo "${{ github.repository }}" --json assets --jq '.assets[].name' 2>/dev/null || true)"
           has() { printf '%s\n' "$ASSETS" | grep -qx "$1"; }
-          has "Jarvis_${V}_linux-x86_64.AppImage"      && echo "linux=false"   >> "$GITHUB_OUTPUT"
           has "Jarvis_${V}_windows-x86_64.exe"         && echo "windows=false" >> "$GITHUB_OUTPUT"
           has "Jarvis_${V}_darwin-aarch64.app.tar.gz"  && echo "macos=false"   >> "$GITHUB_OUTPUT"
           echo "Már kint van:"; printf '%s\n' "$ASSETS"
-
-  linux:
-    needs: plan
-    if: needs.plan.outputs.linux == 'true'
-    # 24.04: itt van `glslc` (a hangmodul Vulkan-shaderéhez). Az AppImage ezért glibc ≥ 2.39 rendszert kér (Ubuntu 24.04+,
-    # Fedora 40+, Debian 13+); régebbihez 22.04 + a LunarG Vulkan SDK kellene.
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Hely felszabadítása (a hangmodul fordítása sokat foglal)
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-          df -h /
-
-      - uses: actions/checkout@v4
-        with:
-          repository: ${{ env.SOURCE_REPO }}
-          ref: ${{ env.SOURCE_REF }}
-          token: ${{ secrets.SOURCE_TOKEN }}
-          fetch-depth: 0
-
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Rendszercsomagok (Tauri + hangmodul)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev libxdo-dev patchelf \
-            cmake clang libclang-dev libvulkan-dev glslc libasound2-dev
-
-      - name: tauri-cli
-        run: cargo install tauri-cli --version '^2' --locked
-
-      - name: Verzió ellenőrzése (a tag és a Cargo.toml egyezzen)
-        run: |
-          VERSION="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"]=="jarvis-app"))')"
-          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          if [ "${{ github.event_name }}" = "push" ] && [ "v$VERSION" != "${{ github.ref_name }}" ]; then
-            echo "A tag (${{ github.ref_name }}) nem egyezik a Cargo.toml verziójával (v$VERSION)." >&2
-            exit 1
-          fi
-
-      - name: Aláírt csomag építése
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          APPIMAGE_EXTRACT_AND_RUN: "1"   # a futtatón nincs FUSE: a linuxdeploy kicsomagolva fut
-          NO_STRIP: "true"
-        run: |
-          umask 077
-          printf '%s' "$TAURI_SIGNING_PRIVATE_KEY" > "$RUNNER_TEMP/jarvis.key"
-          TAURI_SIGNING_PRIVATE_KEY_PATH="$RUNNER_TEMP/jarvis.key" scripts/release.sh
-          rm -f "$RUNNER_TEMP/jarvis.key"
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: linux
-          path: dist/release/${{ env.VERSION }}/*
-          if-no-files-found: error
 
   windows:
     needs: plan
@@ -373,7 +312,7 @@ jobs:
           ls refs/heads/app/hu.jarvis.app/*/
 
   publish:
-    needs: [plan, linux, windows, macos]
+    needs: [plan, windows, macos]
     # tagre automatikusan; kézi indításnál csak ha kérték; a kihagyott (már kint lévő) platform jobja nem akasztja meg
     # a megszakadt (pl. a macOS-futtató kapacitáshiánya miatt) és az elbukott job is megállítja; csak a kihagyott (már kint
     # lévő platform) nem
