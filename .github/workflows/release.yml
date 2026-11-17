@@ -302,7 +302,7 @@ jobs:
       - name: Flatpak-eszközök
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends flatpak flatpak-builder gnupg gpg-agent
+          sudo apt-get install -y --no-install-recommends flatpak flatpak-builder elfutils gnupg gpg-agent
           # az Ubuntu 24.04 alapból tiltja a felhasználói névtereket, a bwrap-nak (flatpak-builder) kellenek
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
