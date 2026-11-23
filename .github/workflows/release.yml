@@ -264,7 +264,12 @@ jobs:
           [ -n "$KEYSTORE_B64" ] || { echo "Hiányzik a JARVIS_TV_KEYSTORE_BASE64 titok." >&2; exit 1; }
           umask 077
           printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/jarvis-tv.jks"
-          JARVIS_TV_KEYSTORE="$RUNNER_TEMP/jarvis-tv.jks" scripts/build-tv-apk.sh
+          # a Maven Central néha 429-et ad (túl sok kérés): újrapróbálás várakozással
+          for i in 1 2 3; do
+            JARVIS_TV_KEYSTORE="$RUNNER_TEMP/jarvis-tv.jks" scripts/build-tv-apk.sh && break
+            [ "$i" = 3 ] && { rm -f "$RUNNER_TEMP/jarvis-tv.jks"; exit 1; }
+            echo "újrapróbálás ($i)…"; sleep $((i * 60))
+          done
           rm -f "$RUNNER_TEMP/jarvis-tv.jks"
 
       - uses: actions/upload-artifact@v4
