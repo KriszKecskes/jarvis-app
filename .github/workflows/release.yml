@@ -238,6 +238,12 @@ jobs:
           distribution: temurin
           java-version: 21
 
+      # a tévés figura állapotgépe WebAssemblyben (a Gradle mascotWasm lépése: cargo, wasm32-unknown-unknown)
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+
       - uses: gradle/actions/setup-gradle@v4   # a Gradle- és a függőség-gyorsítótár
 
       - name: Verzió ellenőrzése (a tag és a Cargo.toml egyezzen)
