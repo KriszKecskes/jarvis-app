@@ -1,5 +1,6 @@
 # A Jarvis felhős kiadás-építése. Ez a nyilvános `jarvis-app` repó workflow-ja: a privát forrást (`jarvis-rs`) a
-# SOURCE_TOKEN titokkal húzza le, az aláíró kulcs titok (TAURI_SIGNING_PRIVATE_KEY[_PASSWORD]).
+# SOURCE_TOKEN titokkal húzza le, az aláíró kulcs titok (TAURI_SIGNING_PRIVATE_KEY[_PASSWORD]; a Jarvis TV APK-é
+# JARVIS_TV_KEYSTORE_BASE64 + JARVIS_TV_KEYSTORE_PASSWORD).
 # Leírás (a jarvis-rs repóban): docs/RELEASE.md "Felhős kiadás".
 #
 # Indítás: tag a jarvis-app repóban (v<verzió>), vagy kézzel (Actions → release → Run workflow; alapból nem publikál).
@@ -14,7 +15,7 @@ on:
         description: "A jarvis-rs ág/tag/commit, amiből építünk (tagre indulva a tag neve)"
         default: main
       only_flatpak:
-        description: "Csak a Flatpak-tároló épül (a Windows/macOS kimarad, a GitHub-kiadás nem készül)"
+        description: "Csak a Flatpak-tároló épül (a Windows/macOS/Android TV kimarad, a GitHub-kiadás nem készül)"
         type: boolean
         default: false
       publish:
@@ -41,15 +42,16 @@ jobs:
     outputs:
       windows: ${{ steps.p.outputs.windows }}
       macos: ${{ steps.p.outputs.macos }}
+      android: ${{ steps.p.outputs.android }}
     steps:
       - id: p
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          for k in windows macos; do echo "$k=true" >> "$GITHUB_OUTPUT"; done
+          for k in windows macos android; do echo "$k=true" >> "$GITHUB_OUTPUT"; done
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.only_flatpak }}" = "true" ]; then
-            for k in windows macos; do echo "$k=false" >> "$GITHUB_OUTPUT"; done
+            for k in windows macos android; do echo "$k=false" >> "$GITHUB_OUTPUT"; done
             exit 0
           fi
           [ "${{ github.event_name }}" = "push" ] || exit 0
@@ -58,6 +60,7 @@ jobs:
           has() { printf '%s\n' "$ASSETS" | grep -qx "$1"; }
           has "Jarvis_${V}_windows-x86_64.exe"         && echo "windows=false" >> "$GITHUB_OUTPUT"
           has "Jarvis_${V}_darwin-aarch64.app.tar.gz"  && echo "macos=false"   >> "$GITHUB_OUTPUT"
+          has "Jarvis_${V}_android-tv.apk"             && echo "android=false" >> "$GITHUB_OUTPUT"
           echo "Már kint van:"; printf '%s\n' "$ASSETS"
 
   windows:
@@ -214,6 +217,56 @@ jobs:
           path: dist/release/${{ env.VERSION }}/*
           if-no-files-found: error
 
+  android:
+    # A Jarvis TV-alkalmazás (Android TV / Google TV) aláírt APK-ja: ugyanaz a scripts/build-tv-apk.sh, mint kézzel. A
+    # kiadásba Jarvis_<verzió>_android-tv.apk néven kerül (a jarvis-site letöltője erre a névre keres). Az updater
+    # (latest.json) nem érinti: a TV-app frissítése kézi (az APK újratelepítése).
+    needs: plan
+    if: needs.plan.outputs.android == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPO }}
+          ref: ${{ env.SOURCE_REF }}
+          token: ${{ secrets.SOURCE_TOKEN }}
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: gradle/actions/setup-gradle@v4   # a Gradle- és a függőség-gyorsítótár
+
+      - name: Verzió ellenőrzése (a tag és a Cargo.toml egyezzen)
+        run: |
+          VERSION="$(grep -m1 '^version' Cargo.toml | sed -E 's/version *= *"([^"]+)"/\1/')"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          if [ "${{ github.event_name }}" = "push" ] && [ "v$VERSION" != "${{ github.ref_name }}" ]; then
+            echo "A tag (${{ github.ref_name }}) nem egyezik a Cargo.toml verziójával (v$VERSION)." >&2
+            exit 1
+          fi
+
+      - name: Aláírt APK (az Android SDK a futtatón rajta van, ANDROID_HOME)
+        env:
+          KEYSTORE_B64: ${{ secrets.JARVIS_TV_KEYSTORE_BASE64 }}
+          JARVIS_TV_KEYSTORE_PASSWORD: ${{ secrets.JARVIS_TV_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          [ -n "$KEYSTORE_B64" ] || { echo "Hiányzik a JARVIS_TV_KEYSTORE_BASE64 titok." >&2; exit 1; }
+          umask 077
+          printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/jarvis-tv.jks"
+          JARVIS_TV_KEYSTORE="$RUNNER_TEMP/jarvis-tv.jks" scripts/build-tv-apk.sh
+          rm -f "$RUNNER_TEMP/jarvis-tv.jks"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-tv
+          path: dist/release/${{ env.VERSION }}/*
+          if-no-files-found: error
+
   flatpak:
     # A Flatpak-tároló: aláírt OSTree-tároló a nyilvános `jarvis-flatpak` repóban (GitHub Pages) – ez adja a Linuxos
     # önfrissítést (`flatpak update`). A tároló korábbi tartalmához hozzáfűz (a régi verziók/deltok megmaradnak, a
@@ -336,7 +389,7 @@ jobs:
           ls refs/heads/app/hu.jarvis.app/*/
 
   publish:
-    needs: [plan, windows, macos]
+    needs: [plan, windows, macos, android]
     # tagre automatikusan; kézi indításnál csak ha kérték; a kihagyott (már kint lévő) platform jobja nem akasztja meg
     # a megszakadt (pl. a macOS-futtató kapacitáshiánya miatt) és az elbukott job is megállítja; csak a kihagyott (már kint
     # lévő platform) nem
